@@ -6,7 +6,9 @@ using Android.Content.PM;
 using Android.Locations;
 using Android.OS;
 using Android.Runtime;
+using Android.Text;
 using Android.Views;
+using Android.Widget;
 using AndroidX.Annotations;
 using AndroidX.AppCompat.App;
 using AndroidX.AppCompat.Widget;
@@ -18,14 +20,19 @@ using Google.Android.Material.FloatingActionButton;
 using Google.Android.Material.Navigation;
 using Google.Android.Material.Snackbar;
 using Java.Lang;
+using Java.Util;
+using Java.Util.Prefs;
 using static Android.Telephony.CarrierConfigManager;
 using static Java.Util.Jar.Attributes;
 
 namespace Notificator
 {
+    [BroadcastReceiver]
     public class NotificationReceiver : BroadcastReceiver
     {
         Android.Widget.TextView textView;
+        public NotificationReceiver()
+        {}
         public NotificationReceiver(Android.Widget.TextView textView)
         {
             this.textView = textView;
@@ -38,67 +45,111 @@ namespace Notificator
         }
     };
 
-    //connection 
-    public class NotificatorListenerServiceConnection : Java.Lang.Object, IServiceConnection
+    // close activity receiver
+    [BroadcastReceiver]
+    public class CloseActivityReceiver : BroadcastReceiver
     {
-        public void OnServiceConnected(ComponentName name, IBinder service)
+        Activity mainActivity;
+        public CloseActivityReceiver()
+        { }
+        public CloseActivityReceiver(Activity activity)
         {
-            Console.WriteLine("Service connected!");
+            mainActivity = activity;
         }
-
-        public void OnServiceDisconnected(ComponentName name)
+        public override void OnReceive(Context context, Intent intent)
         {
-            Console.WriteLine("Service disconnected!");
+            if (intent.Action.Equals(MainActivity.ACTION_CLOSE_ACTIVITY))
+            {
+                // Close the activity
+                mainActivity.Finish();
+            }
         }
     };
 
+    public class RadioChangedListener : Java.Lang.Object, RadioGroup.IOnCheckedChangeListener
+    {          
+        // array of app id for teams and telegram
+        static string[] Apps = { "org.telegram.messenger", "com.microsoft.teams", "org.telegram.messenger,com.microsoft.teams" };
+
+        public void OnCheckedChanged(RadioGroup Group, int id)
+        {
+            if (id < 1000) return;
+            System.Collections.Generic.Dictionary<int, int> buttons = new System.Collections.Generic.Dictionary<int, int> { { Resource.Id.tgButton, 0 }, { Resource.Id.teamsButton, 1 }, { Resource.Id.bothButton, 2 } };
+            // get the app id
+            string appName = Apps[buttons[id]];
+            // save the app id
+            Xamarin.Essentials.Preferences.Set("apps", appName);
+        }
+    }
+
     [Activity(Label = "@string/app_name", Theme = "@style/AppTheme.NoActionBar", MainLauncher = true)]
-    public class MainActivity : AppCompatActivity, NavigationView.IOnNavigationItemSelectedListener
+    public class MainActivity : AppCompatActivity
     {
+        public static string ACTION_CLOSE_ACTIVITY = "com.example.yourapp.ACTION_CLOSE_ACTIVITY";
+
         NotificationReceiver Receiver;
-        NotificatorListenerServiceConnection Connection;
+        CloseActivityReceiver CloseReceiver;
+        RadioGroup radioGroup;
+
         protected override void OnCreate(Bundle savedInstanceState)
         {
             base.OnCreate(savedInstanceState);
             Xamarin.Essentials.Platform.Init(this, savedInstanceState);
             SetContentView(Resource.Layout.activity_main);
-            Toolbar toolbar = FindViewById<Toolbar>(Resource.Id.toolbar);
+            AndroidX.AppCompat.Widget.Toolbar toolbar = FindViewById<AndroidX.AppCompat.Widget.Toolbar>(Resource.Id.toolbar);
             SetSupportActionBar(toolbar);
 
-            FloatingActionButton fab = FindViewById<FloatingActionButton>(Resource.Id.fab);
-            fab.Click += FabOnClick;
-
-            DrawerLayout drawer = FindViewById<DrawerLayout>(Resource.Id.drawer_layout);
-            ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(this, drawer, toolbar, Resource.String.navigation_drawer_open, Resource.String.navigation_drawer_close);
-            drawer.AddDrawerListener(toggle);
-            toggle.SyncState();
-
-            NavigationView navigationView = FindViewById<NavigationView>(Resource.Id.nav_view);
-            navigationView.SetNavigationItemSelectedListener(this);
-
-            Connection = new NotificatorListenerServiceConnection();
             Android.Content.Context context = Android.App.Application.Context;
-            context.BindService(new Android.Content.Intent(context, typeof(NotificatorListenerService)), Connection, Bind.AutoCreate);
-            Console.WriteLine(typeof(NotificatorListenerService).FullName);
 
             //check ACCESS_NOTIFICATION_POLICY BIND_NOTIFICATION_LISTENER_SERVICE
-            Console.WriteLine("BindNotificationListenerService: " + CheckSelfPermission(Android.Manifest.Permission.BindNotificationListenerService));
-            if (CheckSelfPermission(Android.Manifest.Permission.BindNotificationListenerService) == Android.Content.PM.Permission.Denied)
+            if (!IsNotificationServiceEnabled(context))
             {
-                if(ShouldShowRequestPermissionRationale(Android.Manifest.Permission.BindNotificationListenerService))
+                //request permission
+                Intent intent = new Intent(Android.Provider.Settings.ActionNotificationListenerSettings);
+                StartActivity(intent);
+            }
+            // add to CheckedTextView
+            Android.Widget.CheckedTextView ctv = FindViewById<Android.Widget.CheckedTextView>(Resource.Id.ListOfApps);
+            ctv.Checked = IsNotificationServiceEnabled(context);
+            ctv.Text = "NotificationListenerService enabled: " + ctv.Checked;
+
+            if (CheckSelfPermission(Android.Manifest.Permission.PostNotifications) == Android.Content.PM.Permission.Denied)
+            {
+                RequestPermissions(new string[] { Android.Manifest.Permission.PostNotifications }, 0);
+            }
+
+            radioGroup = FindViewById<RadioGroup>(Resource.Id.radioGroup1);
+            radioGroup.SetOnCheckedChangeListener(new RadioChangedListener());
+            radioGroup.Check(2);
+
+            CheckBox shouldNotify = FindViewById<CheckBox>(Resource.Id.ShouldNotify);
+            shouldNotify.Checked = Xamarin.Essentials.Preferences.Get("shouldNotify", false);
+            shouldNotify.CheckedChange += (sender, e) =>
+            {
+                Xamarin.Essentials.Preferences.Set("shouldNotify", e.IsChecked);
+            };
+        }
+        private bool IsNotificationServiceEnabled(Context context)
+        {
+            string flat = Android.Provider.Settings.Secure.GetString(context.ContentResolver, "enabled_notification_listeners");
+            if (!TextUtils.IsEmpty(flat))
+            {
+                string[] names = flat.Split(":");
+                for (int i = 0; i < names.Length; i++)
                 {
-                    ActivityCompat.RequestPermissions(this, new string[] { Android.Manifest.Permission.BindNotificationListenerService }, 0);
-                    FindViewById<Android.Widget.TextView>(Resource.Id.NotificationText).Text = "cant request";
-                }
-                else
-                {
-                    //request permission
-                    ActivityCompat.RequestPermissions(this, new string[] { Android.Manifest.Permission.BindNotificationListenerService }, 0);
-                    Intent intent = new Intent(Android.Provider.Settings.ActionNotificationListenerSettings);
-                    StartActivity(intent);
+                    ComponentName cn = ComponentName.UnflattenFromString(names[i]);
+                    if (cn != null)
+                    {
+                        if (TextUtils.Equals(context.PackageName, cn.PackageName))
+                        {
+                            return true;
+                        }
+                    }
                 }
             }
+            return false;
         }
+
         public override void OnRequestPermissionsResult(int requestCode, string[] permissions, [GeneratedEnum] Permission[] grantResults)
         {
             Xamarin.Essentials.Platform.OnRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -107,6 +158,8 @@ namespace Notificator
             {
                 if (grantResults.Length > 0 && grantResults[0] == Permission.Granted)
                 {
+                    Android.Content.Context context = Android.App.Application.Context;
+                    //context.StartService(new Android.Content.Intent(context, typeof(NotificatorListenerService)));
                     Console.WriteLine("Permission.Granted!");
                 }
                 else
@@ -124,113 +177,10 @@ namespace Notificator
             Receiver = new NotificationReceiver(FindViewById<Android.Widget.TextView>(Resource.Id.NotificationText));
             IntentFilter filter = new IntentFilter("com.yourapp.ALARM_TRIGGERED");
             RegisterReceiver(Receiver, filter);
-        }
 
-        public override void OnBackPressed()
-        {
-            DrawerLayout drawer = FindViewById<DrawerLayout>(Resource.Id.drawer_layout);
-            if (drawer.IsDrawerOpen(GravityCompat.Start))
-            {
-                drawer.CloseDrawer(GravityCompat.Start);
-            }
-            else
-            {
-                base.OnBackPressed();
-            }
-        }
-
-        public override bool OnCreateOptionsMenu(IMenu menu)
-        {
-            MenuInflater.Inflate(Resource.Menu.menu_main, menu);
-            return true;
-        }
-
-        public override bool OnOptionsItemSelected(IMenuItem item)
-        {
-            int id = item.ItemId;
-            if (id == Resource.Id.action_settings)
-            {
-                return true;
-            }
-
-            return base.OnOptionsItemSelected(item);
-        }
-        Notification ForegroundNotification(string title, string message)
-        {
-            using (var notificationManager = NotificationManager.FromContext(ApplicationContext))
-            {
-                var notificationBuilder = new Notification.Builder(ApplicationContext)
-                                                  .SetContentTitle(title)
-                                                                .SetContentText(message)
-                                                                .SetSmallIcon(Resource.Drawable.ic_menu_camera);
-                if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
-                {
-                    NotificationChannel channel;
-                    var channelName = ApplicationContext.PackageName;
-                    channel = notificationManager.GetNotificationChannel(channelName);
-                    if (channel == null)
-                    {
-                        channel = new NotificationChannel(channelName, channelName, NotificationImportance.Default)
-                        {
-                            LockscreenVisibility = NotificationVisibility.Public
-                        };
-                        notificationManager.CreateNotificationChannel(channel);
-                    }
-                    channel.Dispose();
-                    notificationBuilder = notificationBuilder
-                                                      .SetChannelId(channelName);
-                }
-                return notificationBuilder.Build();
-            }
-        }
-
-        private void FabOnClick(object sender, EventArgs eventArgs)
-        {
-            FindViewById<Android.Widget.TextView>(Resource.Id.NotificationText).Text = "one two three";
-            //check ACCESS_NOTIFICATION_POLICY BIND_NOTIFICATION_LISTENER_SERVICE
-            if (CheckSelfPermission(Android.Manifest.Permission.PostNotifications) == Android.Content.PM.Permission.Denied)
-            {
-                RequestPermissions(new string[] { Android.Manifest.Permission.PostNotifications }, 0);
-            }
-            //send simplke notification
-            var notificationManager = AndroidX.Core.App.NotificationManagerCompat.From(this);
-            notificationManager.Notify(0, ForegroundNotification("StackOverflow", "Totally Rocks"));
-            FindViewById<Android.Widget.TextView>(Resource.Id.NotificationText).Text = notificationManager.AreNotificationsEnabled() ? "Notifications enabled" : "Notifications disabled";
-        }
-
-        public bool OnNavigationItemSelected(IMenuItem item)
-        {
-            int id = item.ItemId;
-
-            if (id == Resource.Id.nav_camera)
-            {
-                // Handle the camera action
-            }
-
-            else if (id == Resource.Id.nav_gallery)
-            {
-
-            }
-            else if (id == Resource.Id.nav_slideshow)
-            {
-
-            }
-            else if (id == Resource.Id.nav_manage)
-            {
-
-            }
-            else if (id == Resource.Id.nav_share)
-            {
-
-            }
-            else if (id == Resource.Id.nav_send)
-            {
-
-            }
-
-            DrawerLayout drawer = FindViewById<DrawerLayout>(Resource.Id.drawer_layout);
-            drawer.CloseDrawer(GravityCompat.Start);
-            return true;
+            CloseReceiver = new CloseActivityReceiver(this);
+            IntentFilter closeFilter = new IntentFilter(ACTION_CLOSE_ACTIVITY);
+            RegisterReceiver(CloseReceiver, closeFilter);
         }
     };
 }
