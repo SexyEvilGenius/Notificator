@@ -5,6 +5,7 @@ using Android.Content;
 using Android.OS;
 using AndroidX.Core.App;
 using Android;
+using Notificator;
 
 [BroadcastReceiver]
 public class AlarmReceiver : BroadcastReceiver
@@ -50,14 +51,19 @@ public class AlarmService : Service
         stopIntent.SetAction("STOP_ALARM");
         var stopPendingIntent = PendingIntent.GetBroadcast(this, 0, stopIntent, PendingIntentFlags.Immutable);
         var deletePendingIntent = PendingIntent.GetBroadcast(this, 0, stopIntent, PendingIntentFlags.Immutable);
+        // Open the main activity when the notification is tapped
+        var mainIntent = new Intent(this, typeof(MainActivity));
+        var openPendingIntent = PendingIntent.GetActivity(this, 0, mainIntent, PendingIntentFlags.Immutable);
+
 
         // Create a notification with an action to stop the alarm
         var notification = new NotificationCompat.Builder(this, "alarm_service")
             .SetContentTitle("Alarm")
             .SetContentText("Tap to stop the alarm.")
-            .SetSmallIcon(Resource.Drawable.IcLockIdleAlarm)
-            .AddAction(Resource.Drawable.ButtonStar, "Stop", stopPendingIntent)
+            .SetSmallIcon(Android.Resource.Drawable.IcLockIdleAlarm)
+            .AddAction(Android.Resource.Drawable.ButtonStar, "Stop", stopPendingIntent)
             .SetDeleteIntent(deletePendingIntent) // Set the intent that will fire when the notification is removed.
+            .SetContentIntent(openPendingIntent)
             .Build();
 
         StartForeground(1, notification);
